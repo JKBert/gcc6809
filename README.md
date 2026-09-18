@@ -58,10 +58,10 @@ by environment.
 
 ## Build
 
-  **binutils** — $SRC/configure --target=m6809-unknown-elf
-  **newlib** —
+- **binutils** — $SRC/configure --target=m6809-unknown-elf
+- **newlib** —
 1. ELF library (multilib, 16/32 bits): $SRC/configure --target=m6809-unknown-elf
 2. FLEX-9 library: $SRC/configure --host=m6809-unknown-flex9
 3. UniFLEX 6809 library: $SRC/configure --host=m6809-unknown-uniflex
 4. SoC 63F09 library (32 bits): $SRC/configure --host=m6809-unknown-soc
-  **gcc** (multilib) — $SRC/configure --target=m6809-unknown-elf --disable-libssp --without-headers --with-newlib --enable-languages=c,lto,fortran
+- **gcc** (multilib) — $SRC/configure --target=m6809-unknown-elf --disable-libssp --without-headers --with-newlib --enable-languages=c,lto,fortran
