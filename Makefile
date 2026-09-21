@@ -133,6 +133,30 @@ CROSS_RANLIB := $(CROSS_BIN)/$(TARGET)-ranlib
 
 export PATH := $(CROSS_BIN):$(PATH)
 
+# Real bug hit in practice: on a Debian-family host, /bin/sh is dash,
+# which the libtool scripts config-ml.in generates for each multilib
+# subdirectory's target libraries do NOT all tolerate consistently.
+# libtool's own func_append optimizes to "eval \"$1+=\$2\"" (a bash-ism
+# dash's eval rejects outright, "eval: compile_command+=: not found")
+# whenever the configuring shell was detected to support it -- and it
+# WAS, consistently, everywhere except one specific path: libgfortran's
+# own multilib recursion (config-ml.in's secondary "all-multi"/
+# "install-multi" mechanism, needed at all only because -- see
+# libgfortran-multilib's own comment below -- libgfortran's Makefile,
+# unlike libgcc's or libquadmath's, doesn't wire multilib recursion
+# into the ordinary all/install targets). That path's own SHELL
+# computation lands on plain "/bin/sh" in the generated
+# <multilibdir>/libgfortran/Makefile, disagreeing with the "/bin/bash"
+# every OTHER target library's multilib Makefile (including
+# libgfortran's own top, non-multilib one) correctly gets from the very
+# same build -- confirmed directly by comparing their generated
+# Makefiles' own "SHELL = ..." lines side by side. CONFIG_SHELL is the
+# standard, universal autoconf mechanism for pinning down exactly this
+# choice through every configure invocation a build makes, nested ones
+# included; exporting it here is cheap and closes the gap at the root
+# instead of chasing it through config-ml.in's own logic.
+export CONFIG_SHELL := /bin/bash
+
 COMMON_CONFIGURE_FLAGS := --disable-nls --disable-werror
 
 # gdb/sim/readline/gprofng are not needed to build or use the compiler
