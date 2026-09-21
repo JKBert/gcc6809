@@ -7,7 +7,7 @@
 #   make NEWLIB_SRC=/path/to/newlib-x.y.z \
 #        GCC_SRC=/path/to/gcc-x.y.z \
 #        BINUTILS_SRC=/path/to/binutils-gdb \
-#        INSTALL=/path/to/install/prefix
+#        PREFIX_INSTALL=/path/to/install/prefix
 #
 # Optional (defaults shown):
 #   TARGET=m6809-unknown-elf
@@ -31,7 +31,7 @@
 #      UniFLEX/6309, SoC, SoC/FPU) -- each its own private, non-multilib
 #      newlib build (subdir configure, --host=m6809-unknown-<env>),
 #      with just its libc.a/libg.a/libm.a copied into
-#      $(INSTALL)/$(TARGET)/lib/<multilib-dirname>/<env>/ afterwards.
+#      $(PREFIX_INSTALL)/$(TARGET)/lib/<multilib-dirname>/<env>/ afterwards.
 #      These are NOT part of GCC's own multilib mechanism (GCC's
 #      multilib only knows about the CPU variants, not the
 #      environment) -- environment selection stays a manual -L choice
@@ -63,66 +63,53 @@ STAMP_DIR := $(CURDIR)/.stamps
 # Required inputs -- everything below depends on these, so it is all
 # skipped (and left undefined) for "make help".
 # ---------------------------------------------------------------------
-REQUIRED_VARS := NEWLIB_SRC GCC_SRC BINUTILS_SRC INSTALL
+REQUIRED_VARS := NEWLIB_SRC GCC_SRC BINUTILS_SRC PREFIX_INSTALL
 ifneq ($(MAKECMDGOALS),help)
 $(foreach v,$(REQUIRED_VARS),$(if $($(v)),,$(error $(v) is not set -- run "make help")))
 
-# override: NEWLIB_SRC/GCC_SRC/BINUTILS_SRC/INSTALL come in as "command
-# line" variables (make VAR=value on the invocation) -- that origin beats
-# a plain ":=" inside the makefile, which GNU Make otherwise silently
-# ignores, leaving the ORIGINAL, possibly-relative value in place. Real
-# bug hit in practice: run from a build/ directory with e.g.
-# BINUTILS_SRC=../binutils-gdb, every path below stayed relative to
-# wherever `make` was invoked from -- harmless until a recipe `cd`s
-# into a build directory first ("cd $(BINUTILS_BUILD) && $(BINUTILS_SRC)/
-# configure ..."), at which point the very same relative path now
-# resolves from the NEW directory instead, one level too deep
-# ("../binutils-gdb/build/../binutils-gdb/configure": no such file).
-# `override` makes the ":=" below win regardless of where the variable
-# came from, so every path is absolute before any recipe ever runs.
-override NEWLIB_SRC   := $(abspath $(NEWLIB_SRC))
-override GCC_SRC      := $(abspath $(GCC_SRC))
-override BINUTILS_SRC := $(abspath $(BINUTILS_SRC))
-override INSTALL      := $(abspath $(INSTALL))
+# override: these come in as "command line" variables (make VAR=value on
+# the invocation) -- that origin beats a plain ":=" inside the makefile,
+# which GNU Make otherwise silently ignores, leaving the ORIGINAL,
+# possibly-relative value in place. Real bug hit in practice: run from a
+# build/ directory with e.g. BINUTILS_SRC=../binutils-gdb, every path
+# below stayed relative to wherever `make` was invoked from -- harmless
+# until a recipe `cd`s into a build directory first ("cd $(BINUTILS_BUILD)
+# && $(BINUTILS_SRC)/configure ..."), at which point the very same
+# relative path now resolves from the NEW directory instead, one level
+# too deep ("../binutils-gdb/build/../binutils-gdb/configure: no such
+# file"). `override` makes the ":=" below win regardless of where the
+# variable came from, so every path is absolute before any recipe runs.
+override NEWLIB_SRC      := $(abspath $(NEWLIB_SRC))
+override GCC_SRC         := $(abspath $(GCC_SRC))
+override BINUTILS_SRC    := $(abspath $(BINUTILS_SRC))
+override PREFIX_INSTALL  := $(abspath $(PREFIX_INSTALL))
 
-# `INSTALL` is also the POSIX/autoconf-reserved name for the INSTALL
-# PROGRAM (normally "/usr/bin/install -c" or similar, substituted by
-# AC_PROG_INSTALL). AC_PROG_INSTALL only searches for one when $INSTALL
-# is EMPTY in ITS environment ("checking for a BSD-compatible install");
-# with our own $INSTALL (the install PREFIX, e.g. ".") reaching it
-# instead, configure skips its own search and adopts that literal value
-# as "the install program" -- confirmed directly in a real build's
+# NOT called "INSTALL": real bug hit in practice under that name --
+# `INSTALL` is also the POSIX/autoconf-reserved name for the install
+# PROGRAM (normally "/usr/bin/install -c", substituted by
+# AC_PROG_INSTALL, which only searches for one when $INSTALL is EMPTY in
+# its environment). A command-line-origin make variable isn't just
+# exported into a plain subprocess's environment (`unexport` alone
+# stops that) -- it's ALSO encoded into MAKEFLAGS, which GNU Make keeps
+# exported regardless (the same channel -j/-k survive recursion
+# through), and every child `make` at every depth of binutils-gdb's own
+# internal bfd/opcodes/gas/ld/libsframe/... recursion re-parses
+# MAKEFLAGS at startup and reconstructs the variable as freshly given on
+# ITS OWN command line -- right past that child's own correctly-computed
+# "INSTALL = /usr/bin/install -c". Confirmed directly in a real build's
 # libsframe/config.log ("checking for a BSD-compatible install ...
-# result: ."), which then made every `$(INSTALL_DATA)`-based install
-# recipe in that subdirectory try to run "." (the current-directory
-# shell built-in) as if it were `install`. `--prefix=$(INSTALL)` as an
-# explicit configure ARGUMENT (used throughout this file) is unaffected
-# and remains exactly what every stage needs -- only the IMPLICIT
-# channels below, which autoconf also happens to read from, are the
-# problem.
+# result: ." instead of a real path), and reproduced as far down as
+# "make install" trying to run "." (the current-directory shell
+# built-in) as the install program. Renaming the variable sidesteps the
+# whole problem instead of fighting GNU Make's propagation rules.
 #
-# Two SEPARATE such channels, both needed here, confirmed by testing
-# each in isolation:
-#   - `unexport INSTALL` stops GNU Make's normal per-recipe environment
-#     export (covers any plain, non-recursive subprocess -- a bare
-#     `configure` invocation, for instance).
-#   - It does NOT, on its own, stop a *recursive* $(MAKE) invocation
-#     (binutils-gdb's own top Makefile recursing into gas/ld/bfd/
-#     libsframe/...): a command-line-origin variable is ALSO encoded
-#     into MAKEFLAGS, which stays exported regardless of `unexport`
-#     (that's how -j/-k and the like survive recursion at all) -- every
-#     child `make`, at every depth, re-parses MAKEFLAGS at startup and
-#     reconstructs $(INSTALL) as if freshly given on ITS OWN command
-#     line, right past both `unexport` here and that child's own
-#     Makefile's plain "INSTALL = ..." assignment (command-line origin
-#     always wins over a plain ":="/"=" in the makefile, the same
-#     precedence rule "override" above exists to beat). Emptying
-#     MAKEOVERRIDES (the variable MAKEFLAGS's own command-line-variable
-#     portion is built from) before any such recursion starts is what
-#     actually closes this path -- verified with a throwaway two-level
-#     nested Makefile: the leak survived `unexport INSTALL` alone,
-#     disappeared once MAKEOVERRIDES was cleared too.
-unexport INSTALL
+# MAKEOVERRIDES (the command-line-variable portion MAKEFLAGS is built
+# from) is still cleared below, as cheap defense in depth: none of this
+# file's own command-line variables need to reach any child
+# configure/make -- everything is passed explicitly (--prefix=...,
+# CC=..., and so on) -- so nothing legitimate is lost by keeping every
+# one of them from leaking into a nested autoconf-based build this way,
+# whatever it happens to be named.
 MAKEOVERRIDES :=
 
 # Build directories live inside each source tree, matching this
@@ -138,7 +125,7 @@ NEWLIB_ELF_BUILD := $(NEWLIB_SRC)/build/elf
 # TARGET-prefixed cross tools, available once binutils + the first GCC
 # pass are installed -- used to build newlib, and needed on PATH for
 # GCC's own as/ld auto-detection.
-CROSS_BIN    := $(INSTALL)/bin
+CROSS_BIN    := $(PREFIX_INSTALL)/bin
 CROSS_GCC    := $(CROSS_BIN)/$(TARGET)-gcc
 CROSS_AR     := $(CROSS_BIN)/$(TARGET)-ar
 CROSS_AS     := $(CROSS_BIN)/$(TARGET)-as
@@ -154,7 +141,7 @@ COMMON_CONFIGURE_FLAGS := --disable-nls --disable-werror
 # this tree doesn't recognize one of these flags (autoconf just warns).
 BINUTILS_CONFIGURE_FLAGS := \
 	--target=$(TARGET) \
-	--prefix=$(INSTALL) \
+	--prefix=$(PREFIX_INSTALL) \
 	--disable-gdb --disable-sim --disable-readline --disable-gprofng \
 	$(COMMON_CONFIGURE_FLAGS)
 
@@ -163,7 +150,7 @@ BINUTILS_CONFIGURE_FLAGS := \
 # "all-gcc" pass, no target libc needs to exist yet.
 GCC_CONFIGURE_FLAGS := \
 	--target=$(TARGET) \
-	--prefix=$(INSTALL) \
+	--prefix=$(PREFIX_INSTALL) \
 	--enable-languages=$(LANGUAGES) \
 	--with-newlib \
 	--disable-libssp \
@@ -174,7 +161,7 @@ GCC_CONFIGURE_FLAGS := \
 # multilib build -- see README.md's "newlib (multilib)" section.
 NEWLIB_ELF_CONFIGURE_FLAGS := \
 	--target=$(TARGET) \
-	--prefix=$(INSTALL) \
+	--prefix=$(PREFIX_INSTALL) \
 	CC_FOR_TARGET=$(CROSS_GCC) \
 	AR_FOR_TARGET=$(CROSS_AR) \
 	RANLIB_FOR_TARGET=$(CROSS_RANLIB)
@@ -192,7 +179,7 @@ LIBGFORTRAN_BUILD := $(GCC_BUILD)/$(TARGET)/libgfortran
 # extra CFLAGS, destination subpath under lib/) tuple per variant,
 # copied verbatim from README.md.
 #
-#   name          host                       extra cflags   dest subpath under $(INSTALL)/$(TARGET)/lib
+#   name          host                       extra cflags   dest subpath under $(PREFIX_INSTALL)/$(TARGET)/lib
 # "NONE" stands in for "no extra CFLAGS" -- $(word ...) below silently
 # collapses consecutive separators, so a genuinely empty field would
 # shift every field after it; stripped back out where CFLAGS is built.
@@ -214,13 +201,13 @@ endif
 
 all: libgfortran-multilib newlib
 	@echo ""
-	@echo "Toolchain installed under $(INSTALL)."
+	@echo "Toolchain installed under $(PREFIX_INSTALL)."
 	@echo "Add $(CROSS_BIN) to PATH, then e.g.:"
 	@echo "  $(TARGET)-gcc --print-multi-lib"
 
 help:
 	@echo "Usage:"
-	@echo "  make NEWLIB_SRC=<path> GCC_SRC=<path> BINUTILS_SRC=<path> INSTALL=<path>"
+	@echo "  make NEWLIB_SRC=<path> GCC_SRC=<path> BINUTILS_SRC=<path> PREFIX_INSTALL=<path>"
 	@echo ""
 	@echo "Optional variables (current/default value shown):"
 	@echo "  TARGET=$(TARGET)"
@@ -237,7 +224,7 @@ print-config:
 	@echo "NEWLIB_SRC       = $(NEWLIB_SRC)"
 	@echo "GCC_SRC          = $(GCC_SRC)"
 	@echo "BINUTILS_SRC     = $(BINUTILS_SRC)"
-	@echo "INSTALL          = $(INSTALL)"
+	@echo "PREFIX_INSTALL   = $(PREFIX_INSTALL)"
 	@echo "TARGET           = $(TARGET)"
 	@echo "LANGUAGES        = $(LANGUAGES)"
 	@echo "BINUTILS_BUILD   = $(BINUTILS_BUILD)"
@@ -349,11 +336,11 @@ newlib-$(1): $$(STAMP_DIR)/newlib-$(1)-installed
 
 $$(STAMP_DIR)/newlib-$(1)-installed: $$(STAMP_DIR)/newlib-$(1)-built | $$(STAMP_DIR)
 	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(MAKE_J) install
-	mkdir -p $$(INSTALL)/$$(TARGET)/lib/$(4)
+	mkdir -p $$(PREFIX_INSTALL)/$$(TARGET)/lib/$(4)
 	cp -f $$(NEWLIB_ENV_INSTALL_$(1))/$(2)/lib/libc.a \
 	      $$(NEWLIB_ENV_INSTALL_$(1))/$(2)/lib/libg.a \
 	      $$(NEWLIB_ENV_INSTALL_$(1))/$(2)/lib/libm.a \
-	      $$(INSTALL)/$$(TARGET)/lib/$(4)/
+	      $$(PREFIX_INSTALL)/$$(TARGET)/lib/$(4)/
 	@touch $$@
 
 $$(STAMP_DIR)/newlib-$(1)-built: $$(STAMP_DIR)/newlib-$(1)-configured | $$(STAMP_DIR)
