@@ -67,10 +67,23 @@ REQUIRED_VARS := NEWLIB_SRC GCC_SRC BINUTILS_SRC INSTALL
 ifneq ($(MAKECMDGOALS),help)
 $(foreach v,$(REQUIRED_VARS),$(if $($(v)),,$(error $(v) is not set -- run "make help")))
 
-NEWLIB_SRC   := $(abspath $(NEWLIB_SRC))
-GCC_SRC      := $(abspath $(GCC_SRC))
-BINUTILS_SRC := $(abspath $(BINUTILS_SRC))
-INSTALL      := $(abspath $(INSTALL))
+# override: NEWLIB_SRC/GCC_SRC/BINUTILS_SRC/INSTALL come in as "command
+# line" variables (make VAR=value on the invocation) -- that origin beats
+# a plain ":=" inside the makefile, which GNU Make otherwise silently
+# ignores, leaving the ORIGINAL, possibly-relative value in place. Real
+# bug hit in practice: run from a build/ directory with e.g.
+# BINUTILS_SRC=../binutils-gdb, every path below stayed relative to
+# wherever `make` was invoked from -- harmless until a recipe `cd`s
+# into a build directory first ("cd $(BINUTILS_BUILD) && $(BINUTILS_SRC)/
+# configure ..."), at which point the very same relative path now
+# resolves from the NEW directory instead, one level too deep
+# ("../binutils-gdb/build/../binutils-gdb/configure": no such file).
+# `override` makes the ":=" below win regardless of where the variable
+# came from, so every path is absolute before any recipe ever runs.
+override NEWLIB_SRC   := $(abspath $(NEWLIB_SRC))
+override GCC_SRC      := $(abspath $(GCC_SRC))
+override BINUTILS_SRC := $(abspath $(BINUTILS_SRC))
+override INSTALL      := $(abspath $(INSTALL))
 
 # Build directories live inside each source tree, matching this
 # project's own convention (see README.md, and gcc-16.2.0/build,
