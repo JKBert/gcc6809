@@ -85,6 +85,25 @@ override GCC_SRC      := $(abspath $(GCC_SRC))
 override BINUTILS_SRC := $(abspath $(BINUTILS_SRC))
 override INSTALL      := $(abspath $(INSTALL))
 
+# unexport INSTALL: real bug hit in practice -- GNU Make auto-exports
+# command-line variables into every recipe's subprocess environment, and
+# `INSTALL` is also the POSIX/autoconf-reserved name for the INSTALL
+# PROGRAM (normally "/usr/bin/install -c" or similar, substituted by
+# AC_PROG_INSTALL). AC_PROG_INSTALL only searches for one when $INSTALL
+# is EMPTY in its environment ("checking for a BSD-compatible install");
+# with our own $INSTALL (the install PREFIX, e.g. ".") already sitting
+# there, configure skipped its own search and adopted that literal value
+# as "the install program" instead -- confirmed directly in
+# libsframe/config.log ("checking for a BSD-compatible install ...
+# result: ."), which then made every `$(INSTALL_DATA)`-based install
+# recipe in that subdirectory try to run "." (the current-directory
+# shell built-in) as if it were `install`. `--prefix=$(INSTALL)` as an
+# explicit configure ARGUMENT (used throughout this file) is unaffected
+# and remains exactly what every stage needs -- only the IMPLICIT
+# environment-variable channel autoconf also happens to read from is the
+# problem, and that is what this line closes off.
+unexport INSTALL
+
 # Build directories live inside each source tree, matching this
 # project's own convention (see README.md, and gcc-16.2.0/build,
 # binutils-gdb/build elsewhere in this project). Each newlib environment
