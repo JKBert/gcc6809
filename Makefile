@@ -294,6 +294,23 @@ $(STAMP_DIR)/newlib-elf-configured: $(STAMP_DIR)/gcc-stage1-installed | $(NEWLIB
 # Stage 4: GCC, second pass -- now that newlib exists, this builds and
 # installs the target libraries (libgcc, libgfortran, ...) across every
 # multilib variant.
+#
+# "every multilib variant" is bigger than just the ELF one: t-m6809's
+# MULTILIB_OPTIONS has a SECOND group orthogonal to the CPU submode one
+# (mflex9/muniflex/msoc, pruned by MULTILIB_EXCEPTIONS down to exactly
+# the six real combinations the newlib env variants below cover --
+# flex9, 6309/flex9, uniflex, 6309/uniflex, 63f09/soc, 63f09hf/soc) --
+# genmultilib's cartesian product means gcc-stage2 genuinely tries to
+# configure and link-test libgcc/libgfortran for THOSE combinations too,
+# not just the CPU-only ones ELF multilib covers. Real failure hit
+# building this Makefile: gcc-stage2 ran before any newlib-<env> stamp
+# below existed, so libgfortran's own sub-configure for e.g. "63f09/soc"
+# found no real $(TARGET)/lib/63f09/soc/libc.a to link against yet --
+# "checking whether symbol versioning is supported ... error: Link
+# tests are not allowed after GCC_NO_EXECUTABLES", GCC's own signal
+# that a target-library configure couldn't produce ANY working link.
+# Depending on every newlib-<env> stamp too (not just newlib-elf's)
+# closes this ordering gap.
 # ---------------------------------------------------------------------
 gcc-stage2: $(STAMP_DIR)/gcc-stage2-installed
 
@@ -301,7 +318,7 @@ $(STAMP_DIR)/gcc-stage2-installed: $(STAMP_DIR)/gcc-stage2-built | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J) install
 	@touch $@
 
-$(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(STAMP_DIR)/gcc-stage1-installed | $(STAMP_DIR)
+$(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-installed) $(STAMP_DIR)/gcc-stage1-installed | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J)
 	@touch $@
 
