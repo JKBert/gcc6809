@@ -85,24 +85,45 @@ override GCC_SRC      := $(abspath $(GCC_SRC))
 override BINUTILS_SRC := $(abspath $(BINUTILS_SRC))
 override INSTALL      := $(abspath $(INSTALL))
 
-# unexport INSTALL: real bug hit in practice -- GNU Make auto-exports
-# command-line variables into every recipe's subprocess environment, and
 # `INSTALL` is also the POSIX/autoconf-reserved name for the INSTALL
 # PROGRAM (normally "/usr/bin/install -c" or similar, substituted by
 # AC_PROG_INSTALL). AC_PROG_INSTALL only searches for one when $INSTALL
-# is EMPTY in its environment ("checking for a BSD-compatible install");
-# with our own $INSTALL (the install PREFIX, e.g. ".") already sitting
-# there, configure skipped its own search and adopted that literal value
-# as "the install program" instead -- confirmed directly in
+# is EMPTY in ITS environment ("checking for a BSD-compatible install");
+# with our own $INSTALL (the install PREFIX, e.g. ".") reaching it
+# instead, configure skips its own search and adopts that literal value
+# as "the install program" -- confirmed directly in a real build's
 # libsframe/config.log ("checking for a BSD-compatible install ...
 # result: ."), which then made every `$(INSTALL_DATA)`-based install
 # recipe in that subdirectory try to run "." (the current-directory
 # shell built-in) as if it were `install`. `--prefix=$(INSTALL)` as an
 # explicit configure ARGUMENT (used throughout this file) is unaffected
 # and remains exactly what every stage needs -- only the IMPLICIT
-# environment-variable channel autoconf also happens to read from is the
-# problem, and that is what this line closes off.
+# channels below, which autoconf also happens to read from, are the
+# problem.
+#
+# Two SEPARATE such channels, both needed here, confirmed by testing
+# each in isolation:
+#   - `unexport INSTALL` stops GNU Make's normal per-recipe environment
+#     export (covers any plain, non-recursive subprocess -- a bare
+#     `configure` invocation, for instance).
+#   - It does NOT, on its own, stop a *recursive* $(MAKE) invocation
+#     (binutils-gdb's own top Makefile recursing into gas/ld/bfd/
+#     libsframe/...): a command-line-origin variable is ALSO encoded
+#     into MAKEFLAGS, which stays exported regardless of `unexport`
+#     (that's how -j/-k and the like survive recursion at all) -- every
+#     child `make`, at every depth, re-parses MAKEFLAGS at startup and
+#     reconstructs $(INSTALL) as if freshly given on ITS OWN command
+#     line, right past both `unexport` here and that child's own
+#     Makefile's plain "INSTALL = ..." assignment (command-line origin
+#     always wins over a plain ":="/"=" in the makefile, the same
+#     precedence rule "override" above exists to beat). Emptying
+#     MAKEOVERRIDES (the variable MAKEFLAGS's own command-line-variable
+#     portion is built from) before any such recursion starts is what
+#     actually closes this path -- verified with a throwaway two-level
+#     nested Makefile: the leak survived `unexport INSTALL` alone,
+#     disappeared once MAKEOVERRIDES was cleared too.
 unexport INSTALL
+MAKEOVERRIDES :=
 
 # Build directories live inside each source tree, matching this
 # project's own convention (see README.md, and gcc-16.2.0/build,
