@@ -71,7 +71,7 @@ trees into one install prefix:
 make NEWLIB_SRC=/path/to/newlib-x.y.z \
      GCC_SRC=/path/to/gcc-x.y.z \
      BINUTILS_SRC=/path/to/binutils-gdb \
-     INSTALL=/path/to/install/prefix
+     PREFIX_INSTALL=/path/to/install/prefix
 ```
 
 Each stage is tracked with a stamp file under `.stamps/`, so re-running
@@ -86,13 +86,13 @@ time instead of everything -- `make binutils`, `make gcc-stage1`,
 
 What the Makefile above actually runs, kept here as reference and for
 building a single piece by hand. `$BINUTILS_SRC`, `$GCC_SRC`, `$NEWLIB_SRC`
-and `$INSTALL` are the same four paths the Makefile takes as arguments.
+and `$PREFIX_INSTALL` are the same four paths the Makefile takes as arguments.
 
 #### binutils
 
 ```
 mkdir -p $BINUTILS_SRC/build && cd $BINUTILS_SRC/build
-$BINUTILS_SRC/configure --target=m6809-unknown-elf --prefix=$INSTALL
+$BINUTILS_SRC/configure --target=m6809-unknown-elf --prefix=$PREFIX_INSTALL
 make
 make install
 ```
@@ -108,7 +108,7 @@ $NEWLIB_SRC/configure --target=m6809-unknown-elf \
     CC_FOR_TARGET=m6809-unknown-elf-gcc \
     AR_FOR_TARGET=m6809-unknown-elf-ar \
     RANLIB_FOR_TARGET=m6809-unknown-elf-ranlib \
-    --prefix=$INSTALL
+    --prefix=$PREFIX_INSTALL
 make
 make install
 ```
@@ -125,7 +125,7 @@ $NEWLIB_SRC/newlib/configure --host=m6809-unknown-flex9 \
 make
 make install
 cp -f $NEWLIB_SRC/build/flex9/install/m6809-unknown-flex9/lib/{libc.a,libg.a,libm.a} \
-    $INSTALL/m6809-unknown-elf/lib/flex9/
+    $PREFIX_INSTALL/m6809-unknown-elf/lib/flex9/
 ```
 
 #### newlib (FLEX9, 6309)
@@ -140,7 +140,7 @@ $NEWLIB_SRC/newlib/configure --host=m6809-unknown-flex9 \
 make
 make install
 cp -f $NEWLIB_SRC/build/flex9-6309/install/m6809-unknown-flex9/lib/{libc.a,libg.a,libm.a} \
-    $INSTALL/m6809-unknown-elf/lib/6309/flex9/
+    $PREFIX_INSTALL/m6809-unknown-elf/lib/6309/flex9/
 ```
 
 #### newlib (UniFLEX, 6809)
@@ -155,7 +155,7 @@ $NEWLIB_SRC/newlib/configure --host=m6809-unknown-uniflex \
 make
 make install
 cp -f $NEWLIB_SRC/build/uniflex/install/m6809-unknown-uniflex/lib/{libc.a,libg.a,libm.a} \
-    $INSTALL/m6809-unknown-elf/lib/uniflex/
+    $PREFIX_INSTALL/m6809-unknown-elf/lib/uniflex/
 ```
 
 #### newlib (UniFLEX, 6309)
@@ -170,7 +170,7 @@ $NEWLIB_SRC/newlib/configure --host=m6809-unknown-uniflex \
 make
 make install
 cp -f $NEWLIB_SRC/build/uniflex-6309/install/m6809-unknown-uniflex/lib/{libc.a,libg.a,libm.a} \
-    $INSTALL/m6809-unknown-elf/lib/6309/uniflex/
+    $PREFIX_INSTALL/m6809-unknown-elf/lib/6309/uniflex/
 ```
 
 #### newlib (SoC, 63F09)
@@ -185,7 +185,7 @@ $NEWLIB_SRC/newlib/configure --host=m6809-unknown-soc \
 make
 make install
 cp -f $NEWLIB_SRC/build/soc/install/m6809-unknown-soc/lib/{libc.a,libg.a,libm.a} \
-    $INSTALL/m6809-unknown-elf/lib/63f09/soc/
+    $PREFIX_INSTALL/m6809-unknown-elf/lib/63f09/soc/
 ```
 
 #### newlib (SoC, 63F09HF)
@@ -200,7 +200,7 @@ $NEWLIB_SRC/newlib/configure --host=m6809-unknown-sochf \
 make
 make install
 cp -f $NEWLIB_SRC/build/sochf/install/m6809-unknown-sochf/lib/{libc.a,libg.a,libm.a} \
-    $INSTALL/m6809-unknown-elf/lib/63f09hf/soc/
+    $PREFIX_INSTALL/m6809-unknown-elf/lib/63f09hf/soc/
 ```
 
 #### gcc
@@ -208,7 +208,7 @@ cp -f $NEWLIB_SRC/build/sochf/install/m6809-unknown-sochf/lib/{libc.a,libg.a,lib
 ```
 mkdir -p $GCC_SRC/build && cd $GCC_SRC/build
 $GCC_SRC/configure --target=m6809-unknown-elf --disable-libssp \
-    --with-newlib --enable-languages=c,lto,fortran --prefix=$INSTALL
+    --with-newlib --enable-languages=c,lto,fortran --prefix=$PREFIX_INSTALL
 make
 make install
 ```
