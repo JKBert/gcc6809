@@ -259,6 +259,32 @@ print-config:
 $(STAMP_DIR) $(BINUTILS_BUILD) $(GCC_BUILD) $(NEWLIB_ELF_BUILD):
 	mkdir -p $@
 
+# Always-out-of-date prerequisite, the standard GNU Make idiom for "make
+# this recipe run every time, regardless of its own stamp's mtime" --
+# used below on binutils'/gcc's own build+install steps only (their
+# SOURCE trees have real, correct per-file Make dependencies already,
+# so re-invoking them is always fast and safe when nothing changed);
+# never on newlib's or gcc-stage2's, which invoke the cross-compiler as
+# an opaque external program their own Makefiles have no way to notice
+# changed -- see those rules' own comments for how staleness is
+# detected for them instead.
+.PHONY: FORCE
+FORCE:
+
+# Real installed-tool files, not witness stamps: everything below that
+# needs to notice "the cross toolchain actually changed" (not just
+# "this Makefile's own gcc-stage1/binutils targets ran") depends on
+# THESE, not on binutils-installed's/gcc-stage1-installed's own stamps.
+# install-gcc/binutils' own "make install" only copies files that are
+# actually newer, so these files' mtimes genuinely reflect "did a real
+# rebuild happen" -- which a witness stamp touched unconditionally by
+# an always-run recipe (see FORCE above) cannot. No recipe of their own
+# on purpose: binutils-installed's/gcc-stage1-installed's recipes are
+# what actually write these files; this just tells Make they exist and
+# orders the dependency correctly.
+$(CROSS_AS) $(CROSS_AR) $(CROSS_RANLIB): $(STAMP_DIR)/binutils-installed
+$(CROSS_GCC): $(STAMP_DIR)/gcc-stage1-installed
+
 # ---------------------------------------------------------------------
 # Stage 1: binutils (as, ld, ar, ranlib, objdump, ... for $(TARGET))
 # ---------------------------------------------------------------------
@@ -268,7 +294,7 @@ $(STAMP_DIR)/binutils-installed: $(STAMP_DIR)/binutils-built | $(STAMP_DIR)
 	cd $(BINUTILS_BUILD) && $(MAKE_J) install
 	@touch $@
 
-$(STAMP_DIR)/binutils-built: $(STAMP_DIR)/binutils-configured | $(STAMP_DIR)
+$(STAMP_DIR)/binutils-built: $(STAMP_DIR)/binutils-configured FORCE | $(STAMP_DIR)
 	cd $(BINUTILS_BUILD) && $(MAKE_J)
 	@touch $@
 
@@ -287,11 +313,20 @@ $(STAMP_DIR)/gcc-stage1-installed: $(STAMP_DIR)/gcc-stage1-built | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J) install-gcc
 	@touch $@
 
-$(STAMP_DIR)/gcc-stage1-built: $(STAMP_DIR)/gcc-configured | $(STAMP_DIR)
+$(STAMP_DIR)/gcc-stage1-built: $(STAMP_DIR)/gcc-configured FORCE | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J) all-gcc
 	@touch $@
 
-$(STAMP_DIR)/gcc-configured: $(STAMP_DIR)/binutils-installed | $(GCC_BUILD) $(STAMP_DIR)
+# binutils-installed is order-only here on purpose: gcc-configured must
+# not run BEFORE binutils is installed, but must NOT be treated as out
+# of date just because binutils-installed's own stamp was touched again
+# (which now happens on every invocation, via FORCE above) -- configure
+# output does not depend on a binutils REBUILD of the same source, only
+# on binutils having been configured/built at all the first time
+# (already covered by "the target doesn't exist yet"). A real
+# (non-order-only) prerequisite here would make gcc-configured, and
+# everything downstream of it, rerun on every single `make` invocation.
+$(STAMP_DIR)/gcc-configured: | $(STAMP_DIR)/binutils-installed $(GCC_BUILD) $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(GCC_SRC)/configure $(GCC_CONFIGURE_FLAGS)
 	@touch $@
 
@@ -306,11 +341,28 @@ $(STAMP_DIR)/newlib-elf-installed: $(STAMP_DIR)/newlib-elf-built | $(STAMP_DIR)
 	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J) install
 	@touch $@
 
-$(STAMP_DIR)/newlib-elf-built: $(STAMP_DIR)/newlib-elf-configured | $(STAMP_DIR)
+# Real cross-tool files as prerequisites (not FORCE, and not the
+# gcc-stage1-installed/binutils-installed witness stamps): newlib's own
+# generated Makefile tracks only ITS OWN source files, with no notion at
+# all of "the compiler used to build me changed" -- so Make itself must
+# be the one to notice that here, from real, mtime-accurate file
+# prerequisites (see the CROSS_GCC/CROSS_AR/CROSS_AS/CROSS_RANLIB rule
+# above), and this recipe must force a full rebuild once triggered
+# ("make clean" first) since newlib's own up-to-date object rules would
+# otherwise see nothing to recompile against the new compiler. The
+# "make clean" is a harmless no-op the very first time this runs
+# (nothing built yet).
+$(STAMP_DIR)/newlib-elf-built: $(STAMP_DIR)/newlib-elf-configured $(CROSS_GCC) $(CROSS_AR) $(CROSS_AS) $(CROSS_RANLIB) | $(STAMP_DIR)
+	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J) clean
 	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J)
 	@touch $@
 
-$(STAMP_DIR)/newlib-elf-configured: $(STAMP_DIR)/gcc-stage1-installed | $(NEWLIB_ELF_BUILD) $(STAMP_DIR)
+# gcc-stage1-installed order-only here, same reasoning as
+# gcc-configured's own comment above: configure must run AFTER the
+# cross-compiler is installed, but must not be treated as stale just
+# because gcc-stage1-installed's stamp was touched again by an
+# unrelated FORCE-driven rebuild attempt.
+$(STAMP_DIR)/newlib-elf-configured: | $(STAMP_DIR)/gcc-stage1-installed $(NEWLIB_ELF_BUILD) $(STAMP_DIR)
 	cd $(NEWLIB_ELF_BUILD) && $(NEWLIB_SRC)/configure $(NEWLIB_ELF_CONFIGURE_FLAGS)
 	@touch $@
 
@@ -342,7 +394,27 @@ $(STAMP_DIR)/gcc-stage2-installed: $(STAMP_DIR)/gcc-stage2-built | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J) install
 	@touch $@
 
-$(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-installed) $(STAMP_DIR)/gcc-stage1-installed | $(STAMP_DIR)
+# Real bug hit in practice: even after gcc-stage1 is FORCE-rebuilt above
+# (see FORCE's own comment), a plain `make` in $(GCC_BUILD) leaves every
+# libgcc/libgfortran/libquadmath .o file untouched -- confirmed directly
+# (find ... -newer .../gcc/cc1 found 0 of 10640 .o files newer, right
+# after a fresh cc1 rebuild). These target libraries are compiled BY the
+# cross-compiler as an opaque external program; GCC's own Makefile
+# machinery here tracks their SOURCE files, same blind spot as newlib's
+# (see newlib-elf-built's own comment) -- so the same fix applies: real
+# cross-tool files as prerequisites (CROSS_GCC in particular acts as a
+# proxy for "did the m6809 backend's own source change", since
+# gcc-stage1's FORCE-rebuilt all-gcc/install-gcc only touch CROSS_GCC's
+# mtime when a real recompile happened), and a forced rebuild once
+# triggered. Unlike newlib, a plain "make clean" here is wrong -- this
+# is the SAME build tree as the host compiler (cc1 etc.), and a full
+# clean would also wipe that, forcing an expensive, unnecessary
+# multi-stage GCC rebuild just to refresh three target libraries. The
+# scoped clean-target-libgcc/-libgfortran/-libquadmath targets (part of
+# this GCC tree's own generated top Makefile, confirmed present) clean
+# only the target libraries, leaving the host compiler alone.
+$(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-installed) $(CROSS_GCC) $(CROSS_AR) $(CROSS_AS) $(CROSS_RANLIB) | $(STAMP_DIR)
+	cd $(GCC_BUILD) && $(MAKE_J) clean-target-libgcc clean-target-libgfortran clean-target-libquadmath
 	cd $(GCC_BUILD) && $(MAKE_J)
 	@touch $@
 
@@ -384,11 +456,17 @@ $$(STAMP_DIR)/newlib-$(1)-installed: $$(STAMP_DIR)/newlib-$(1)-built | $$(STAMP_
 	      $$(PREFIX_INSTALL)/$$(TARGET)/lib/$(4)/
 	@touch $$@
 
-$$(STAMP_DIR)/newlib-$(1)-built: $$(STAMP_DIR)/newlib-$(1)-configured | $$(STAMP_DIR)
+# Same real-file trigger + forced rebuild as newlib-elf-built above --
+# this environment's own generated Makefile has the same blind spot to
+# "the compiler changed" as the ELF one does.
+$$(STAMP_DIR)/newlib-$(1)-built: $$(STAMP_DIR)/newlib-$(1)-configured $$(CROSS_GCC) $$(CROSS_AR) $$(CROSS_AS) $$(CROSS_RANLIB) | $$(STAMP_DIR)
+	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(MAKE_J) clean
 	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(MAKE_J)
 	@touch $$@
 
-$$(STAMP_DIR)/newlib-$(1)-configured: $$(STAMP_DIR)/gcc-stage1-installed | $$(STAMP_DIR)
+# gcc-stage1-installed order-only, same reasoning as newlib-elf-
+# configured's own comment above.
+$$(STAMP_DIR)/newlib-$(1)-configured: | $$(STAMP_DIR)/gcc-stage1-installed $$(STAMP_DIR)
 	mkdir -p $$(NEWLIB_ENV_BUILD_$(1))
 	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(NEWLIB_SRC)/newlib/configure \
 		--host=$(2) \
