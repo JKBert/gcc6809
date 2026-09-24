@@ -157,6 +157,15 @@ export PATH := $(CROSS_BIN):$(PATH)
 # instead of chasing it through config-ml.in's own logic.
 export CONFIG_SHELL := /bin/bash
 
+# Pre-seeds ac_cv_func_localtime_r=yes for every m6809-* configure this
+# Makefile drives -- see m6809-config.site's own comment for why: the
+# disposable AC_CHECK_FUNC probe libgfortran runs for this symbol
+# genuinely overflows the 16-bit (-m6309) multilib's 64 KiB address
+# space on its own (a real newlib dependency chain, not a bug), which
+# would otherwise make libgfortran's time_1.h define its own
+# conflicting "static localtime_r" next to newlib's real, working one.
+export CONFIG_SITE := $(CURDIR)/m6809-config.site
+
 COMMON_CONFIGURE_FLAGS := --disable-nls --disable-werror
 
 # gdb/sim/readline/gprofng are not needed to build or use the compiler

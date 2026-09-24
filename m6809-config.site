@@ -1,0 +1,29 @@
+# Cross-compilation site defaults for the m6809/6309/63F09/63F09HF
+# target, sourced automatically by every `configure` this Makefile
+# drives (CONFIG_SITE exported in the top-level Makefile).
+#
+# ac_cv_func_localtime_r: libgfortran's own AC_CHECK_FUNC probe for
+# this symbol is a disposable, do-nothing link test -- but on this
+# target, resolving localtime_r pulls in newlib's real tzset_r (->
+# getenv_r/strtoul/malloc/scanf/stdio), a legitimately large
+# dependency chain. For the -m6309 multilib specifically, that chain
+# is just over 64 KiB, so the probe link fails with a genuine `ld`
+# error ("section .rodata VMA wraps around address space") -- ld is
+# correct, not buggy: a 6309 program that big really cannot fit a
+# 16-bit address space. But the symbol itself is real (confirmed: the
+# identical probe succeeds for the default 6809 and for the
+# 63f09/63f09hf multilibs, all built from the same newlib), so
+# failing the check here would only make libgfortran fall back to its
+# own tiny "static localtime_r" wrapper -- which then conflicts with
+# newlib's own <time.h> declaration ("static declaration of
+# 'localtime_r' follows non-static declaration"). Pre-seeding the
+# answer skips the unreliable probe instead of trying to shrink it.
+#
+# $host is not computed yet when config.site is sourced (autoconf
+# canonicalizes it later) -- $host_alias, set directly from --host=,
+# is what's actually available here.
+case $host_alias in
+  m6809-*)
+    ac_cv_func_localtime_r=${ac_cv_func_localtime_r=yes}
+    ;;
+esac
