@@ -58,6 +58,12 @@ by environment.
 
 ## Build
 
+Sources of gcc, binutils and newlib are available through anonymous ftp at
+ftp://newton.systella.fr.
+
+Please note that this server runs OpenVMS. Thus, use binary transfers and,
+if you use Filezilla, configure your client to use a VMS server.
+
 ### Automated (recommended)
 
 The `Makefile` at the root of this repository drives the entire sequence

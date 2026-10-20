@@ -157,14 +157,24 @@ export PATH := $(CROSS_BIN):$(PATH)
 # instead of chasing it through config-ml.in's own logic.
 export CONFIG_SHELL := /bin/bash
 
-# Pre-seeds ac_cv_func_localtime_r=yes for every m6809-* configure this
-# Makefile drives -- see m6809-config.site's own comment for why: the
-# disposable AC_CHECK_FUNC probe libgfortran runs for this symbol
-# genuinely overflows the 16-bit (-m6309) multilib's 64 KiB address
-# space on its own (a real newlib dependency chain, not a bug), which
-# would otherwise make libgfortran's time_1.h define its own
-# conflicting "static localtime_r" next to newlib's real, working one.
-export CONFIG_SITE := $(CURDIR)/m6809-config.site
+# Link tests must not be judged by size.  GCC's configure probes (AC_CHECK_FUNC
+# and friends) link a tiny program that, for many functions, drags in a large
+# part of newlib (localtime_r alone pulls tzset, scanf, malloc and stdio, well
+# over 64 KiB).  The linker rightly refuses an image that does not fit a 16-bit
+# address space or a MEMORY{} region of the FLEX9/UniFLEX/SoC emulations, and
+# every such probe then answers a false "no": libgfortran's time_1.h defined
+# its own static localtime_r clashing with <time.h>, and about a hundred other
+# HAVE_* results (acos, snprintf, strtof, erf, j0, the complex functions...)
+# flipped in the flex9/uniflex multilibs.  These flags, handed to the target
+# libraries' configure through LDFLAGS_FOR_TARGET: no section-address check
+# (the 16-bit address wrap of the bare-metal emulations), and generous MEMORY
+# region lengths (ld emulations m6809flex9/m6809uniflex/m6809soc read
+# __ram_length/__rom_length).  Undefined symbols still fail the link, so a
+# probe for a function that does not exist still answers "no".  The previous
+# attempt, a CONFIG_SITE file, could never work in this flow: GCC's top-level
+# Makefile runs every module's configure as "CONFIG_SITE=no-such-file".
+TARGET_LINK_TEST_FLAGS := -Wl,--no-check-sections \
+	-Wl,--defsym,__ram_length=0x10000000 -Wl,--defsym,__rom_length=0x10000000
 
 COMMON_CONFIGURE_FLAGS := --disable-nls --disable-werror
 
@@ -400,7 +410,7 @@ $(STAMP_DIR)/newlib-elf-configured: | $(STAMP_DIR)/gcc-stage1-installed $(NEWLIB
 gcc-stage2: $(STAMP_DIR)/gcc-stage2-installed
 
 $(STAMP_DIR)/gcc-stage2-installed: $(STAMP_DIR)/gcc-stage2-built | $(STAMP_DIR)
-	cd $(GCC_BUILD) && $(MAKE_J) install
+	cd $(GCC_BUILD) && $(MAKE_J) LDFLAGS_FOR_TARGET='$(TARGET_LINK_TEST_FLAGS)' install
 	@touch $@
 
 # Real bug hit in practice: even after gcc-stage1 is FORCE-rebuilt above
@@ -424,7 +434,7 @@ $(STAMP_DIR)/gcc-stage2-installed: $(STAMP_DIR)/gcc-stage2-built | $(STAMP_DIR)
 # only the target libraries, leaving the host compiler alone.
 $(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-installed) $(CROSS_GCC) $(CROSS_AR) $(CROSS_AS) $(CROSS_RANLIB) | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J) clean-target-libgcc clean-target-libgfortran clean-target-libquadmath
-	cd $(GCC_BUILD) && $(MAKE_J)
+	cd $(GCC_BUILD) && $(MAKE_J) LDFLAGS_FOR_TARGET='$(TARGET_LINK_TEST_FLAGS)'
 	@touch $@
 
 # libgfortran's own Makefile, unlike libgcc's, does not wire its
