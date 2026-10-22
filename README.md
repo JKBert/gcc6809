@@ -19,6 +19,10 @@ hardware extension of the Motorola 6809 — not an emulation or a
 reimplementation from a spec sheet, but a real, synthesizable design meant to
 run on an FPGA. Full documentation: https://63f09.systella.fr
 
+Emulator is downloadable at https://github.com/JKBert/63F09-emulator. Please
+note that this emulator is cycle-for-cycle compliant with real system on chip.
+It was not written to be fast, but to write microkernel such as L4/X2.
+
 It sits at the top of a three-level, backward-compatible family:
 
 - **MC6809** — the original 16-bit Motorola CPU (1978): the baseline
