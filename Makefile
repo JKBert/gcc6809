@@ -11,7 +11,7 @@
 #
 # Optional (defaults shown):
 #   TARGET=m6809-unknown-elf
-#   LANGUAGES=c,lto,fortran
+#   LANGUAGES=c,c++,lto,fortran
 #   JOBS=5
 #
 # This mirrors the build recipe in this repo's own README.md:
@@ -50,7 +50,7 @@ SHELL := /bin/bash
 # "make help" always works.
 # ---------------------------------------------------------------------
 TARGET    ?= m6809-unknown-elf
-LANGUAGES ?= c,lto,fortran
+LANGUAGES ?= c,c++,lto,fortran
 JOBS      ?= 5
 
 MAKE_J := $(MAKE) -j$(JOBS)
@@ -197,6 +197,7 @@ GCC_CONFIGURE_FLAGS := \
 	--enable-languages=$(LANGUAGES) \
 	--with-newlib \
 	--disable-libssp \
+	--disable-libstdcxx \
 	$(COMMON_CONFIGURE_FLAGS)
 
 # Top-level combined-tree newlib configure (not newlib/configure), so
@@ -238,11 +239,11 @@ NEWLIB_ENV_NAMES := $(foreach s,$(NEWLIB_ENV_SPECS),$(word 1,$(subst |, ,$(s))))
 endif
 
 .PHONY: all help print-config \
-	binutils gcc-stage1 newlib newlib-elf gcc-stage2 libgfortran-multilib \
+	binutils gcc-stage1 newlib newlib-elf gcc-stage2 libgfortran-multilib libstdcxx-multilib \
 	clean distclean \
 	$(NEWLIB_ENV_NAMES:%=newlib-%)
 
-all: libgfortran-multilib newlib
+all: libgfortran-multilib newlib libstdcxx-multilib
 	@echo ""
 	@echo "Toolchain installed under $(PREFIX_INSTALL)."
 	@echo "Add $(CROSS_BIN) to PATH, then e.g.:"
@@ -450,6 +451,23 @@ $(STAMP_DIR)/libgfortran-multilib: $(STAMP_DIR)/gcc-stage2-installed | $(STAMP_D
 	cd $(LIBGFORTRAN_BUILD) && ./config.status
 	cd $(LIBGFORTRAN_BUILD) && $(MAKE_J) all-multi
 	cd $(LIBGFORTRAN_BUILD) && $(MAKE_J) install-multi
+	@touch $@
+
+# libstdc++ (libsupc++ included), for the two 32-bit multilibs only -- the 16-bit ones cannot host it
+# (its int, size_t... exceed 16 bits).  Configured by hand, one multilib at a time, by
+# build-libstdcxx.sh (see its header for why --disable-libstdcxx at the top level and why the include
+# directory is moved aside during each configure).  The SoC directories get a copy of the libraries
+# of their CPU: same code, only the link environment differs, and -msoc looks in lib/<cpu>/soc.
+LIBSTDCXX_MULTILIBS := 63f09:-m63f09 63f09hf:-m63f09hf
+
+libstdcxx-multilib: $(STAMP_DIR)/libstdcxx-multilib
+$(STAMP_DIR)/libstdcxx-multilib: $(STAMP_DIR)/gcc-stage2-installed $(STAMP_DIR)/newlib-elf-installed | $(STAMP_DIR)
+	$(foreach m,$(LIBSTDCXX_MULTILIBS),$(CURDIR)/build-libstdcxx.sh $(GCC_SRC) $(GCC_BUILD) $(PREFIX_INSTALL) \
+		$(TARGET) $(word 1,$(subst :, ,$(m))) "$(word 2,$(subst :, ,$(m)))" $(JOBS) &&) true
+	$(foreach m,$(LIBSTDCXX_MULTILIBS),mkdir -p $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/soc && \
+		cp -f $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/libstdc++.a \
+		      $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/libsupc++.a \
+		      $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/soc/ &&) true
 	@touch $@
 
 # ---------------------------------------------------------------------

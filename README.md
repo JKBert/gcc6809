@@ -250,3 +250,22 @@ cd $GCC_SRC/build/m6809-unknown-elf/libgfortran
 make all-multi
 make install-multi
 ```
+
+## C++ and libstdc++ (32-bit submodes only)
+
+`--enable-languages` includes `c++` (the `LANGUAGES` variable of the Makefile), and the top-level
+configure gets `--disable-libstdcxx`: `libstdc++` is built by hand, for the two 32-bit multilibs
+(`63f09`, `63f09hf`) only, by `build-libstdcxx.sh` (the `libstdcxx-multilib` target of the Makefile). The
+16-bit submodes cannot host it (its `int`, `size_t`... exceed 16 bits): C++ code compiles there, without
+the standard library. The SoC directories (`lib/63f09/soc`, `lib/63f09hf/soc`) receive a copy of the
+libraries of their CPU. By hand, after the compiler and newlib are installed:
+
+```
+./build-libstdcxx.sh $GCC_SRC $GCC_SRC/build $PREFIX m6809-unknown-elf 63f09   "-m63f09"
+./build-libstdcxx.sh $GCC_SRC $GCC_SRC/build $PREFIX m6809-unknown-elf 63f09hf "-m63f09hf"
+```
+
+Exceptions work (throw/catch, destructors during the unwind, RTTI): `$GCC_SRC/test/eh_tests.sh`.
+A program that throws weighs about 60 Kbytes at `-Os`; link with `-ffunction-sections -Wl,--gc-sections`
+to fit the 64 Kbytes of ROM of the SoC. The header of `build-libstdcxx.sh` explains the traps (the
+include directory already installed by the first multilib falsifies the configure probes of the next).
