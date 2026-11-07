@@ -240,7 +240,7 @@ endif
 
 .PHONY: all help print-config \
 	binutils gcc-stage1 newlib newlib-elf gcc-stage2 libgfortran-multilib libstdcxx-multilib \
-	clean distclean \
+	force-target-libs clean distclean \
 	$(NEWLIB_ENV_NAMES:%=newlib-%)
 
 all: libgfortran-multilib newlib libstdcxx-multilib
@@ -262,7 +262,10 @@ help:
 	@echo "         libgfortran-multilib, newlib (all variants below),"
 	@echo "         newlib-elf, newlib-flex9, newlib-flex9-6309,"
 	@echo "         newlib-uniflex, newlib-uniflex-6309, newlib-soc,"
-	@echo "         newlib-sochf, clean, distclean, print-config"
+	@echo "         newlib-sochf, force-target-libs, clean, distclean, print-config"
+	@echo ""
+	@echo "force-target-libs: clean and rebuild newlib and the target libraries on the"
+	@echo "next make (needed after a libgcc source file is removed or renamed)."
 
 print-config:
 	@echo "NEWLIB_SRC       = $(NEWLIB_SRC)"
@@ -304,6 +307,44 @@ FORCE:
 # orders the dependency correctly.
 $(CROSS_AS) $(CROSS_AR) $(CROSS_RANLIB): $(STAMP_DIR)/binutils-installed
 $(CROSS_GCC): $(STAMP_DIR)/gcc-stage1-installed
+
+# ---------------------------------------------------------------------
+# Change detection for everything that is compiled BY the cross compiler
+# (newlib, libgcc, libgfortran, libstdc++).
+#
+# Their own Makefiles track their own sources but not "the compiler or the
+# assembler changed", so those builds must be cleaned when the toolchain
+# changes -- and only then.  The installed driver ($(CROSS_GCC)) is NOT a
+# usable witness for that: "make install-gcc" (run on every invocation, see
+# FORCE above) copies cc1, the driver, the plugin headers... again whether or
+# not anything changed, so their mtimes move on every run.  (Observed
+# 2026-11-07: cc1 built on the 5th, installed again at 10:29 on the 7th.)
+#
+# The *build-tree* outputs are written only by a real compile or link.  Their
+# name, size and mtime are recorded in an id file that is rewritten ONLY when
+# the content differs, so the id file's own mtime is a faithful "something
+# really changed" signal -- independent of how make treats targets without a
+# recipe.  The recipe runs on every invocation (the stamps it depends on are
+# touched by FORCE); the id file's mtime moves only on a real change.
+# ---------------------------------------------------------------------
+TOOLCHAIN_ID   := $(STAMP_DIR)/toolchain.id
+NEWLIB_LIBS_ID := $(STAMP_DIR)/newlib-libs.id
+
+$(TOOLCHAIN_ID): $(STAMP_DIR)/binutils-built $(STAMP_DIR)/gcc-stage1-built | $(STAMP_DIR)
+	@stat -c '%n %s %Y' $(GCC_BUILD)/gcc/cc1 $(GCC_BUILD)/gcc/xgcc \
+		$(BINUTILS_BUILD)/gas/as-new $(BINUTILS_BUILD)/ld/ld-new \
+		$(BINUTILS_BUILD)/binutils/ar $(BINUTILS_BUILD)/binutils/ranlib \
+		$$(ls $(GCC_BUILD)/gcc/cc1plus $(GCC_BUILD)/gcc/f951 2>/dev/null) > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv -f $@.new $@; echo "toolchain changed"; fi
+
+# The libraries newlib really built (build directories, not the install
+# copies, which are rewritten on every "make install").  libgcc, libgfortran
+# and libstdc++ are configured against them, so a change cleans those too.
+$(NEWLIB_LIBS_ID): $(STAMP_DIR)/newlib-elf-built $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-built) | $(STAMP_DIR)
+	@{ find $(NEWLIB_ELF_BUILD) -name 'lib[cmg].a' -printf '%p %s %T@\n'; \
+	   for d in $(NEWLIB_ENV_NAMES:%=$(NEWLIB_SRC)/build/%); do \
+	     find $$d -maxdepth 1 -name 'lib[cmg].a' -printf '%p %s %T@\n'; done; } | sort > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv -f $@.new $@; echo "newlib libraries changed"; fi
 
 # ---------------------------------------------------------------------
 # Stage 1: binutils (as, ld, ar, ranlib, objdump, ... for $(TARGET))
@@ -361,20 +402,19 @@ $(STAMP_DIR)/newlib-elf-installed: $(STAMP_DIR)/newlib-elf-built | $(STAMP_DIR)
 	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J) install
 	@touch $@
 
-# Real cross-tool files as prerequisites (not FORCE, and not the
-# gcc-stage1-installed/binutils-installed witness stamps): newlib's own
-# generated Makefile tracks only ITS OWN source files, with no notion at
-# all of "the compiler used to build me changed" -- so Make itself must
-# be the one to notice that here, from real, mtime-accurate file
-# prerequisites (see the CROSS_GCC/CROSS_AR/CROSS_AS/CROSS_RANLIB rule
-# above), and this recipe must force a full rebuild once triggered
-# ("make clean" first) since newlib's own up-to-date object rules would
-# otherwise see nothing to recompile against the new compiler. The
-# "make clean" is a harmless no-op the very first time this runs
-# (nothing built yet).
-$(STAMP_DIR)/newlib-elf-built: $(STAMP_DIR)/newlib-elf-configured $(CROSS_GCC) $(CROSS_AR) $(CROSS_AS) $(CROSS_RANLIB) | $(STAMP_DIR)
-	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J) clean
+# Two steps, like every compiled-by-the-cross-compiler build below:
+#  * -cleaned: "make clean", only when the toolchain really changed
+#    ($(TOOLCHAIN_ID), see above).  newlib's generated Makefile has no notion
+#    of "the compiler used to build me changed", so without the clean its
+#    up-to-date object rules would see nothing to recompile.
+#  * -built: an ordinary incremental make, on EVERY run (FORCE), so that a
+#    change to newlib's own sources is picked up too.  Nothing to do is fast.
+$(STAMP_DIR)/newlib-elf-built: $(STAMP_DIR)/newlib-elf-cleaned FORCE | $(STAMP_DIR)
 	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J)
+	@touch $@
+
+$(STAMP_DIR)/newlib-elf-cleaned: $(STAMP_DIR)/newlib-elf-configured $(TOOLCHAIN_ID) | $(STAMP_DIR)
+	cd $(NEWLIB_ELF_BUILD) && $(MAKE_J) clean
 	@touch $@
 
 # gcc-stage1-installed order-only here, same reasoning as
@@ -421,22 +461,36 @@ $(STAMP_DIR)/gcc-stage2-installed: $(STAMP_DIR)/gcc-stage2-built | $(STAMP_DIR)
 # after a fresh cc1 rebuild). These target libraries are compiled BY the
 # cross-compiler as an opaque external program; GCC's own Makefile
 # machinery here tracks their SOURCE files, same blind spot as newlib's
-# (see newlib-elf-built's own comment) -- so the same fix applies: real
-# cross-tool files as prerequisites (CROSS_GCC in particular acts as a
-# proxy for "did the m6809 backend's own source change", since
-# gcc-stage1's FORCE-rebuilt all-gcc/install-gcc only touch CROSS_GCC's
-# mtime when a real recompile happened), and a forced rebuild once
-# triggered. Unlike newlib, a plain "make clean" here is wrong -- this
-# is the SAME build tree as the host compiler (cc1 etc.), and a full
-# clean would also wipe that, forcing an expensive, unnecessary
-# multi-stage GCC rebuild just to refresh three target libraries. The
-# scoped clean-target-libgcc/-libgfortran/-libquadmath targets (part of
-# this GCC tree's own generated top Makefile, confirmed present) clean
-# only the target libraries, leaving the host compiler alone.
-$(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-installed) $(CROSS_GCC) $(CROSS_AR) $(CROSS_AS) $(CROSS_RANLIB) | $(STAMP_DIR)
-	cd $(GCC_BUILD) && $(MAKE_J) clean-target-libgcc clean-target-libgfortran clean-target-libquadmath
+# (see newlib-elf-built's own comment).  Same two steps as newlib:
+#  * -cleaned: the scoped clean-target-libgcc/-libgfortran/-libquadmath
+#    (part of this GCC tree's own generated top Makefile), only when the
+#    toolchain or the newlib libraries really changed.  A plain "make
+#    clean" would also wipe the host compiler.
+#  * -built: an incremental make on every run, so that a change to a
+#    libgcc source (libgcc/config/m6809/...) is compiled.
+# The newlib stamps are order-only: every newlib environment must be
+# installed first (libgfortran's configure for e.g. "63f09/soc" needs a real
+# lib/63f09/soc/libc.a to link against, or it fails with "Link tests are not
+# allowed after GCC_NO_EXECUTABLES"), but "installed" stamps are touched on
+# every run and must not trigger the clean.
+#
+# If a libgcc source file is REMOVED or RENAMED (atomic.S -> atomic.c,
+# 2026-11-06), the old dependency files still name it and make stops with
+# "No rule to make target": run "make force-target-libs", and if the message
+# persists delete the stale *.dep files of the libgcc build directories.
+$(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/gcc-stage2-cleaned FORCE | $(STAMP_DIR)
 	cd $(GCC_BUILD) && $(MAKE_J) LDFLAGS_FOR_TARGET='$(TARGET_LINK_TEST_FLAGS)'
 	@touch $@
+
+$(STAMP_DIR)/gcc-stage2-cleaned: $(TOOLCHAIN_ID) $(NEWLIB_LIBS_ID) | $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-installed) $(STAMP_DIR)
+	cd $(GCC_BUILD) && $(MAKE_J) clean-target-libgcc clean-target-libgfortran clean-target-libquadmath
+	@touch $@
+
+# Forces the next make to clean and rebuild newlib and the target libraries.
+force-target-libs:
+	rm -f $(STAMP_DIR)/gcc-stage2-cleaned $(STAMP_DIR)/libgfortran-configured \
+		$(STAMP_DIR)/libstdcxx-multilib $(STAMP_DIR)/newlib-elf-cleaned \
+		$(NEWLIB_ENV_NAMES:%=$(STAMP_DIR)/newlib-%-cleaned)
 
 # libgfortran's own Makefile, unlike libgcc's, does not wire its
 # multilib recursion into the ordinary "all"/"install" targets in this
@@ -446,9 +500,17 @@ $(STAMP_DIR)/gcc-stage2-built: $(STAMP_DIR)/newlib-elf-installed $(NEWLIB_ENV_NA
 # MULTIDIRS and reconfigures the multilib subdirectories; without it,
 # "make all-multi" can silently do nothing if libgfortran was
 # configured before the cross-compiler reported multilib support.
+# config.status only when the libraries were cleaned (it regenerates the
+# multilib Makefiles and libtool scripts, which needs CONFIG_SHELL, see
+# above: under dash the multilib libtool links an EMPTY libgfortran.a --
+# 8 bytes -- without any error); all-multi/install-multi are incremental
+# and run every time.
 libgfortran-multilib: $(STAMP_DIR)/libgfortran-multilib
-$(STAMP_DIR)/libgfortran-multilib: $(STAMP_DIR)/gcc-stage2-installed | $(STAMP_DIR)
+$(STAMP_DIR)/libgfortran-configured: $(STAMP_DIR)/gcc-stage2-cleaned | $(STAMP_DIR)/gcc-stage2-installed $(STAMP_DIR)
 	cd $(LIBGFORTRAN_BUILD) && ./config.status
+	@touch $@
+
+$(STAMP_DIR)/libgfortran-multilib: $(STAMP_DIR)/libgfortran-configured $(STAMP_DIR)/gcc-stage2-installed | $(STAMP_DIR)
 	cd $(LIBGFORTRAN_BUILD) && $(MAKE_J) all-multi
 	cd $(LIBGFORTRAN_BUILD) && $(MAKE_J) install-multi
 	@touch $@
@@ -460,14 +522,19 @@ $(STAMP_DIR)/libgfortran-multilib: $(STAMP_DIR)/gcc-stage2-installed | $(STAMP_D
 # of their CPU: same code, only the link environment differs, and -msoc looks in lib/<cpu>/soc.
 LIBSTDCXX_MULTILIBS := 63f09:-m63f09 63f09hf:-m63f09hf
 
+# Rebuilt only when the libraries were cleaned (a new toolchain or new newlib) or when the script
+# changed: it configures from scratch and takes about twenty minutes.
+LIBSTDCXX_CPUS := $(foreach m,$(LIBSTDCXX_MULTILIBS),$(word 1,$(subst :, ,$(m))))
+
 libstdcxx-multilib: $(STAMP_DIR)/libstdcxx-multilib
-$(STAMP_DIR)/libstdcxx-multilib: $(STAMP_DIR)/gcc-stage2-installed $(STAMP_DIR)/newlib-elf-installed | $(STAMP_DIR)
+$(STAMP_DIR)/libstdcxx-multilib: $(STAMP_DIR)/gcc-stage2-cleaned $(CURDIR)/build-libstdcxx.sh | $(STAMP_DIR)/gcc-stage2-installed $(STAMP_DIR)/newlib-elf-installed $(STAMP_DIR)
 	$(foreach m,$(LIBSTDCXX_MULTILIBS),$(CURDIR)/build-libstdcxx.sh $(GCC_SRC) $(GCC_BUILD) $(PREFIX_INSTALL) \
 		$(TARGET) $(word 1,$(subst :, ,$(m))) "$(word 2,$(subst :, ,$(m)))" $(JOBS) &&) true
-	$(foreach m,$(LIBSTDCXX_MULTILIBS),mkdir -p $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/soc && \
-		cp -f $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/libstdc++.a \
-		      $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/libsupc++.a \
-		      $(PREFIX_INSTALL)/$(TARGET)/lib/$(word 1,$(subst :, ,$(m)))/soc/ &&) true
+	for c in $(LIBSTDCXX_CPUS); do \
+		L=$(PREFIX_INSTALL)/$(TARGET)/lib/$$c; mkdir -p $$L/soc; \
+		for f in libstdc++.a libsupc++.a libstdc++exp.a libstdc++.la libsupc++.la libstdc++exp.la \
+			libstdc++.modules.json; do \
+			if [ -e $$L/$$f ]; then cp -f $$L/$$f $$L/soc/$$f; fi; done; done
 	@touch $@
 
 # ---------------------------------------------------------------------
@@ -493,12 +560,15 @@ $$(STAMP_DIR)/newlib-$(1)-installed: $$(STAMP_DIR)/newlib-$(1)-built | $$(STAMP_
 	      $$(PREFIX_INSTALL)/$$(TARGET)/lib/$(4)/
 	@touch $$@
 
-# Same real-file trigger + forced rebuild as newlib-elf-built above --
-# this environment's own generated Makefile has the same blind spot to
-# "the compiler changed" as the ELF one does.
-$$(STAMP_DIR)/newlib-$(1)-built: $$(STAMP_DIR)/newlib-$(1)-configured $$(CROSS_GCC) $$(CROSS_AR) $$(CROSS_AS) $$(CROSS_RANLIB) | $$(STAMP_DIR)
-	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(MAKE_J) clean
+# Same two steps as newlib-elf above: clean only on a real toolchain change,
+# incremental make on every run -- this environment's own generated Makefile
+# has the same blind spot to "the compiler changed" as the ELF one does.
+$$(STAMP_DIR)/newlib-$(1)-built: $$(STAMP_DIR)/newlib-$(1)-cleaned FORCE | $$(STAMP_DIR)
 	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(MAKE_J)
+	@touch $$@
+
+$$(STAMP_DIR)/newlib-$(1)-cleaned: $$(STAMP_DIR)/newlib-$(1)-configured $$(TOOLCHAIN_ID) | $$(STAMP_DIR)
+	cd $$(NEWLIB_ENV_BUILD_$(1)) && $$(MAKE_J) clean
 	@touch $$@
 
 # gcc-stage1-installed order-only, same reasoning as newlib-elf-

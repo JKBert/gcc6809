@@ -88,6 +88,21 @@ Each stage is tracked with a stamp file under `.stamps/`, so re-running
 `make` after an interruption or a failure resumes where it left off instead
 of starting over; `make clean` removes the build directories (never the
 installed prefix or the stamps), `make distclean` also drops the stamps.
+
+What gets rebuilt on a second run: newlib, libgcc, libgfortran and libstdc++
+are compiled by the cross compiler, so they are cleaned (`make clean` in
+their build directory) only when the toolchain really changed -- `cc1`,
+`xgcc`, `as-new`, `ld-new`, `ar`, `ranlib` of the build trees are recorded in
+`.stamps/toolchain.id`, which is rewritten only when one of them differs --
+or, for the target libraries, when newlib's libraries changed
+(`.stamps/newlib-libs.id`). Every run also does an ordinary incremental
+`make` in each of them, so a change to a newlib or `libgcc` source is
+compiled without a clean. libstdc++ (about twenty minutes, configured from
+scratch) is redone only after a clean. `make force-target-libs` forces the
+clean; use it after a `libgcc` source file is removed or renamed, and delete
+the stale `*.dep` files of the libgcc build directories if make still asks
+for the old file.
+
 Run `make help` for the full variable/target list, or build one piece at a
 time instead of everything -- `make binutils`, `make gcc-stage1`,
 `make newlib-soc`, `make newlib` (every newlib variant), etc.
